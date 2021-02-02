@@ -1,23 +1,3 @@
-/**************************************************************************
- This is an example for our Monochrome OLEDs based on SSD1306 drivers
-
- Pick one up today in the adafruit shop!
- ------> http://www.adafruit.com/category/63_98
-
- This example is for a 128x32 pixel display using I2C to communicate
- 3 pins are required to interface (two I2C and one reset).
-
- Adafruit invests time and resources providing this open
- source code, please support Adafruit and open-source
- hardware by purchasing products from Adafruit!
-
- Written by Limor Fried/Ladyada for Adafruit Industries,
- with contributions from the open source community.
- BSD license, check license.txt for more information
- All text above, and the splash screen below must be
- included in any redistribution.
- **************************************************************************/
-
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -37,9 +17,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define WALL_WIDTH    24
 
 #define START_POSITION_X 50
-#define START_POSITION_Y 6
+#define START_POSITION_Y 14
 
-const unsigned char PROGMEM wall[] = {
+// フィールドの座標
+// topL(42,14) topR(66,14)
+// btmL(42,56) btmR(66,56)
+// 1ブロックが2*2pxのイメージ
+const unsigned char PROGMEM wallImg[] = {
   B11000000,B00000000,B00000011,
   B11000000,B00000000,B00000011,
   B11000000,B00000000,B00000011,
@@ -84,16 +68,16 @@ const unsigned char PROGMEM wall[] = {
   B11111111,B11111111,B11111111,
 };
 
-const unsigned char PROGMEM minos[][8] =
+const unsigned char PROGMEM minosImg[][8] =
     {
       { B00000000,
-        B00000000,
-        B00000000,
         B00000000,
         B00001100,
         B00001100,
         B00111111,
-        B00111111 },
+        B00111111,
+        B00000000,
+        B00000000 },
 
       { B00110000,
         B00110000,
@@ -150,6 +134,76 @@ const unsigned char PROGMEM minos[][8] =
         B00000000 }
     };
 
+// フィールド簡略配列
+char wall[][12] = {
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,1,1,1,1,1,1,1,1,1,1,1}
+};
+
+const unsigned char PROGMEM minos[][4][4] = {
+  {
+    {0,0,0,0},
+    {0,0,1,0},
+    {0,1,1,1},
+    {0,0,0,0}
+  },
+  {
+    {0,1,0,0},
+    {0,1,0,0},
+    {0,1,0,0},
+    {0,1,0,0}
+  },
+  {
+    {0,0,0,0},
+    {0,1,0,0},
+    {0,1,0,0},
+    {0,1,1,0}
+  },
+  {
+    {0,0,0,0},
+    {0,1,0,0},
+    {0,1,0,0},
+    {1,1,0,0}
+  },
+  {
+    {0,0,0,0},
+    {0,0,0,0},
+    {1,1,0,0},
+    {0,1,1,0}
+  },
+  {
+    {0,0,0,0},
+    {0,0,0,0},
+    {0,0,1,1},
+    {0,1,1,0}
+  },
+  {
+    {0,0,0,0},
+    {0,1,1,0},
+    {0,1,1,0},
+    {0,0,0,0}
+  },
+};
+
 void setup() {
   Serial.begin(9600);
 
@@ -164,50 +218,71 @@ void setup() {
   display.display();
   delay(2000);
 
-  for(;;) {
-    startTetlis(minos[0], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[1], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[2], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[3], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[4], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[5], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-    startTetlis(minos[6], LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
-  }
+  startTetlis(LOGO_WIDTH, LOGO_HEIGHT); // Animate bitmaps
+
 }
 
 void loop() {
+}
+
+/**
+ * hit check function
+ */
+bool hitCheck(int x, int y) {
+  // TODO 落下中のブロックの次の位置情報を取得
+  // TODO 現在のフィールドと比較
+  // TODO 1が重なるところがあれば進ませない
+  if(y >= 45) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * stop mino function
+ */
+void stopMino() {
+
+}
+
+/**
+ *  save field information
+ */
+void saveField() {
+  
 }
 
 #define XPOS   0 // Indexes into the 'icons' array in function below
 #define YPOS   1
 #define DELTAY 2
 
-void startTetlis(const uint8_t *bitmap, uint8_t w, uint8_t h) {
-  int8_t f, icons[NUMFLAKES][3];
-  icons[0][XPOS]   = START_POSITION_X; // random(1 - LOGO_WIDTH, display.width());
-  icons[0][YPOS]   = -LOGO_HEIGHT;
-  icons[0][DELTAY] = 3;
-  for(int i=0; i<20; i++) {
-    display.clearDisplay(); // Clear the display buffer
-
-    // Draw Wall
-    display.drawBitmap(42, 8, wall, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
-
-    // Draw each snowflake:
-    display.drawBitmap(START_POSITION_X, icons[0][YPOS], bitmap, w, h, SSD1306_WHITE);
-
-    display.display(); // Show the display buffer on the screen
-    delay(200);        // Pause for 1/10 second
-
-    // Then update coordinates of each flake...
-    for(f=0; f< NUMFLAKES; f++) {
-      icons[f][YPOS] += icons[f][DELTAY];
-      // If snowflake is off the bottom of the screen...
-      if (icons[f][YPOS] >= display.height()) {
-        // Reinitialize to a random position, just off the top
-        icons[f][XPOS]   = START_POSITION_X;
-        icons[f][YPOS]   = -LOGO_HEIGHT;
-        icons[f][DELTAY] = 3;
+void startTetlis(uint8_t w, uint8_t h) {
+  for(;;){
+    int8_t f, icons[NUMFLAKES][3];
+    icons[0][XPOS]   = START_POSITION_X; // random(1 - LOGO_WIDTH, display.width());
+    icons[0][YPOS]   = START_POSITION_Y - 8;
+    icons[0][DELTAY] = 2;
+    // 表示するミノを設定
+    int selectMino = random(0, 6);
+    for(int i=0; i<20; i++) {
+      display.clearDisplay(); // Clear the display buffer
+  
+      // あたり判定
+      if( hitCheck(icons[0][XPOS], icons[0][YPOS]) ) {
+        break;
+      }
+      // Draw Wall
+      display.drawBitmap(42, 14, wallImg, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
+  
+      // Draw each snowflake:
+      display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[selectMino], w, h, SSD1306_WHITE);
+  
+      display.display(); // Show the display buffer on the screen
+      delay(200);        // Pause for 1/10 second
+  
+      // Then update coordinates of each flake...
+      for(f=0; f< NUMFLAKES; f++) {
+        icons[f][YPOS] += icons[f][DELTAY];
       }
     }
   }
