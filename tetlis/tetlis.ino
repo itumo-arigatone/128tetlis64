@@ -227,15 +227,25 @@ void loop() {
 
 /**
  * hit check function
+ * param; y
+ * param; x
+ * param: 現在のミノの種類
  */
-bool hitCheck(int x, int y) {
-  // TODO 落下中のブロックの次の位置情報を取得
-  // TODO 現在のフィールドと比較
-  // TODO 1が重なるところがあれば進ませない
-  if(y >= 45) {
-    return true;
+bool hitCheck(int y, int mino) {
+  // 落下中のブロックの次の位置情報を取得
+  int nextY = y + 1;
+  bool result = false;
+  // 現在のフィールドと比較
+  // 1が重なるところがあれば進ませない
+  for(int i=0; 0<12; i++){
+    for(int j=0; 0<4; j++) {
+      if(wall[nextY][5] == 1 && minos[mino][3][j] ==1) {
+        result = true;
+        //break;
+      }
+    }
   }
-  return false;
+  return result;
 }
 
 /**
@@ -264,19 +274,21 @@ void startTetlis(uint8_t w, uint8_t h) {
     icons[0][DELTAY] = 2;
     // 表示するミノを設定
     int selectMino = random(0, 6);
-    for(int i=0; i<20; i++) {
+    for(int i=0; i<30; i++) {
       display.clearDisplay(); // Clear the display buffer
   
       // あたり判定
-      if( hitCheck(icons[0][XPOS], icons[0][YPOS]) ) {
+      //bool hit = hitCheck(i, selectMino);
+      /*if( hit ) {
+        //TODO 着地だったら固定処理とフィールド登録処理
         break;
-      }
+      }*/
       // Draw Wall
       display.drawBitmap(42, 14, wallImg, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
   
       // Draw each snowflake:
       display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[selectMino], w, h, SSD1306_WHITE);
-  
+      
       display.display(); // Show the display buffer on the screen
       delay(200);        // Pause for 1/10 second
   
