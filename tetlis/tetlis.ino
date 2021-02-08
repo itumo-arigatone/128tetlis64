@@ -134,8 +134,9 @@ const unsigned char PROGMEM minosImg[][8] =
         B00000000 }
     };
 
+// index 5 = x座標の0
 // フィールド簡略配列
-char wall[][12] = {
+unsigned char wall[][12] = {
   {1,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,1},
@@ -231,17 +232,21 @@ void loop() {
  * param; x
  * param: 現在のミノの種類
  */
-bool hitCheck(int y, int mino) {
+bool hitCheck(int y, int nextX, int mino) {
   // 落下中のブロックの次の位置情報を取得
   int nextY = y + 1;
+  int xIndex = nextX + 5;
   bool result = false;
   // 現在のフィールドと比較
-  // 1が重なるところがあれば進ませない
-  for(int i=0; 0<12; i++){
-    for(int j=0; 0<4; j++) {
-      if(wall[nextY][5] == 1 && minos[mino][3][j] ==1) {
+  // TODO nextYとnextXからwallの比較対象を見つけ出す
+  // minos の配列の数だけ回す
+  for(int i=0; i<4; i++){ // y
+    for(int j=0; j<4; j++) { //x
+      Serial.println(wall[nextY + i][xIndex + j]);
+      if ( wall[nextY + i][xIndex + j] >= 1 && minos[mino][i][j] >= 1 ) {
         result = true;
-        //break;
+        Serial.println("inif");
+        break;
       }
     }
   }
@@ -276,13 +281,15 @@ void startTetlis(uint8_t w, uint8_t h) {
     int selectMino = random(0, 6);
     for(int i=0; i<30; i++) {
       display.clearDisplay(); // Clear the display buffer
+
+      // TODO ボタンからx座標の位置を常に把握しておく
   
       // あたり判定
-      //bool hit = hitCheck(i, selectMino);
-      /*if( hit ) {
+      bool hit = hitCheck(i, 0,selectMino);
+      if( hit ) {
         //TODO 着地だったら固定処理とフィールド登録処理
         break;
-      }*/
+      }
       // Draw Wall
       display.drawBitmap(42, 14, wallImg, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
   
