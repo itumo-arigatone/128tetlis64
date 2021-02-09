@@ -137,6 +137,10 @@ const unsigned char PROGMEM minosImg[][8] =
 // index 5 = x座標の0
 // フィールド簡略配列
 unsigned char wall[][12] = {
+  {1,0,0,0,0,0,0,0,0,0,0,1}, // 開始位置
+  {1,0,0,0,0,0,0,0,0,0,0,1}, // 壁は描写されない
+  {1,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,0,0,0,0,0,0,1}, // ここまで
   {1,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,1},
@@ -160,50 +164,50 @@ unsigned char wall[][12] = {
   {1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
-const unsigned char PROGMEM minos[][4][4] = {
-  {
-    {0,0,0,0},
-    {0,0,1,0},
-    {0,1,1,1},
-    {0,0,0,0}
-  },
-  {
-    {0,1,0,0},
-    {0,1,0,0},
-    {0,1,0,0},
-    {0,1,0,0}
-  },
-  {
-    {0,0,0,0},
-    {0,1,0,0},
-    {0,1,0,0},
-    {0,1,1,0}
-  },
-  {
-    {0,0,0,0},
-    {0,1,0,0},
-    {0,1,0,0},
-    {1,1,0,0}
-  },
-  {
-    {0,0,0,0},
-    {0,0,0,0},
-    {1,1,0,0},
-    {0,1,1,0}
-  },
-  {
-    {0,0,0,0},
-    {0,0,0,0},
-    {0,0,1,1},
-    {0,1,1,0}
-  },
-  {
-    {0,0,0,0},
-    {0,1,1,0},
-    {0,1,1,0},
-    {0,0,0,0}
-  },
-};
+const unsigned char PROGMEM minos[7][4][4] = {
+    {
+      {0,0,0,0},
+      {0,0,1,0},
+      {0,1,1,1},
+      {0,0,0,0}
+    },
+    {
+      {0,1,0,0},
+      {0,1,0,0},
+      {0,1,0,0},
+      {0,1,0,0}
+    },
+    {
+      {0,0,0,0},
+      {0,1,0,0},
+      {0,1,0,0},
+      {0,1,1,0}
+    },
+    {
+      {0,0,0,0},
+      {0,1,0,0},
+      {0,1,0,0},
+      {1,1,0,0}
+    },
+    {
+      {0,0,0,0},
+      {0,0,0,0},
+      {1,1,0,0},
+      {0,1,1,0}
+    },
+    {
+      {0,0,0,0},
+      {0,0,0,0},
+      {0,0,1,1},
+      {0,1,1,0}
+    },
+    {
+      {0,0,0,0},
+      {0,1,1,0},
+      {0,1,1,0},
+      {0,0,0,0}
+    },
+  };
 
 void setup() {
   Serial.begin(9600);
@@ -232,20 +236,17 @@ void loop() {
  * param; x
  * param: 現在のミノの種類
  */
-bool hitCheck(int y, int nextX, int mino) {
+bool hitCheck(int y, int nextX, int minoIndex) {
   // 落下中のブロックの次の位置情報を取得
-  int nextY = y + 1;
+  int nextY = y;
   int xIndex = nextX + 5;
   bool result = false;
   // 現在のフィールドと比較
-  // TODO nextYとnextXからwallの比較対象を見つけ出す
   // minos の配列の数だけ回す
   for(int i=0; i<4; i++){ // y
     for(int j=0; j<4; j++) { //x
-      Serial.println(wall[nextY + i][xIndex + j]);
-      if ( wall[nextY + i][xIndex + j] >= 1 && minos[mino][i][j] >= 1 ) {
+      if ( wall[nextY + i][xIndex + j] >= 1 && minos[minoIndex][i][j] >= 1 ) {
         result = true;
-        Serial.println("inif");
         break;
       }
     }
@@ -263,8 +264,15 @@ void stopMino() {
 /**
  *  save field information
  */
-void saveField() {
-  
+void saveField(int x, int y, int minoIndex) {
+  Serial.println(minos[minoIndex][0][1]);
+  for(int i=0; i<4; i++){ // y
+    for(int j=0; j<4; j++) { //x
+      if(minos[minoIndex][i][j] >= 1){
+        wall[y + i][x + j] = 1; // [i][j];
+      }
+    }
+  }
 }
 
 #define XPOS   0 // Indexes into the 'icons' array in function below
@@ -278,26 +286,32 @@ void startTetlis(uint8_t w, uint8_t h) {
     icons[0][YPOS]   = START_POSITION_Y - 8;
     icons[0][DELTAY] = 2;
     // 表示するミノを設定
-    int selectMino = random(0, 6);
+    int ran = rand() % 6 + 1;
+    int *selectMino = &ran;
     for(int i=0; i<30; i++) {
       display.clearDisplay(); // Clear the display buffer
 
       // TODO ボタンからx座標の位置を常に把握しておく
+      int positionX = 0;
+      int positionY = i;
   
       // あたり判定
-      bool hit = hitCheck(i, 0,selectMino);
+      bool hit = hitCheck(i, positionX, *selectMino);
       if( hit ) {
-        //TODO 着地だったら固定処理とフィールド登録処理
+        // 着地だったら固定処理とフィールド登録処理
+        Serial.println(*selectMino);
+        Serial.println(minos[6][0][1]);
+        saveField(positionX, positionY, *selectMino);
         break;
       }
       // Draw Wall
       display.drawBitmap(42, 14, wallImg, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
   
       // Draw each snowflake:
-      display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[selectMino], w, h, SSD1306_WHITE);
+      display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[*selectMino], w, h, SSD1306_WHITE);
       
       display.display(); // Show the display buffer on the screen
-      delay(200);        // Pause for 1/10 second
+      delay(300);        // Pause for 1/10 second
   
       // Then update coordinates of each flake...
       for(f=0; f< NUMFLAKES; f++) {
