@@ -136,7 +136,7 @@ const unsigned char PROGMEM minosImg[][8] =
 
 // index 5 = x座標の0
 // フィールド簡略配列
-unsigned char wall[][12] = {
+static char wall[25][12] = {
   {1,0,0,0,0,0,0,0,0,0,0,1}, // 開始位置
   {1,0,0,0,0,0,0,0,0,0,0,1}, // 壁は描写されない
   {1,0,0,0,0,0,0,0,0,0,0,1},
@@ -164,7 +164,7 @@ unsigned char wall[][12] = {
   {1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
-const unsigned char PROGMEM minos[7][4][4] = {
+static const unsigned char PROGMEM minos[7][4][4] = {
     {
       {0,0,0,0},
       {0,0,1,0},
@@ -206,7 +206,7 @@ const unsigned char PROGMEM minos[7][4][4] = {
       {0,1,1,0},
       {0,1,1,0},
       {0,0,0,0}
-    },
+    }
   };
 
 void setup() {
@@ -262,14 +262,49 @@ void stopMino() {
 }
 
 /**
+ * stop mino function
+ */
+void resetField() {
+  Serial.println("reset");
+  char wall[25][12] = {
+    {1,0,0,0,0,0,0,0,0,0,0,1}, // 開始位置
+    {1,0,0,0,0,0,0,0,0,0,0,1}, // 壁は描写されない
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1}, // ここまで
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1}
+  };
+}
+
+/**
  *  save field information
  */
 void saveField(int x, int y, int minoIndex) {
-  Serial.println(minos[minoIndex][0][1]);
   for(int i=0; i<4; i++){ // y
     for(int j=0; j<4; j++) { //x
+      wall[y + i][x + j] = minos[minoIndex][i][j];
+
       if(minos[minoIndex][i][j] >= 1){
-        wall[y + i][x + j] = 1; // [i][j];
+        wall[y + i - 1][x + j + 6] = 1;
       }
     }
   }
@@ -280,35 +315,37 @@ void saveField(int x, int y, int minoIndex) {
 #define DELTAY 2
 
 void startTetlis(uint8_t w, uint8_t h) {
+
   for(;;){
+    // 表示するミノを設定
+    int selectMino = rand() % 6;
     int8_t f, icons[NUMFLAKES][3];
-    icons[0][XPOS]   = START_POSITION_X; // random(1 - LOGO_WIDTH, display.width());
+    icons[0][XPOS]   = START_POSITION_X;
     icons[0][YPOS]   = START_POSITION_Y - 8;
     icons[0][DELTAY] = 2;
-    // 表示するミノを設定
-    int ran = rand() % 6 + 1;
-    int *selectMino = &ran;
     for(int i=0; i<30; i++) {
       display.clearDisplay(); // Clear the display buffer
 
       // TODO ボタンからx座標の位置を常に把握しておく
       int positionX = 0;
       int positionY = i;
-  
       // あたり判定
-      bool hit = hitCheck(i, positionX, *selectMino);
+      bool hit = hitCheck(i, positionX, selectMino);
       if( hit ) {
+        // もしi=0だったらゲームオーバーとしてリセット
+        if(i == 0){
+          resetField();
+          break;
+        }
         // 着地だったら固定処理とフィールド登録処理
-        Serial.println(*selectMino);
-        Serial.println(minos[6][0][1]);
-        saveField(positionX, positionY, *selectMino);
+        // TODO 着地判定
+        saveField(positionX, positionY, selectMino);
         break;
       }
       // Draw Wall
       display.drawBitmap(42, 14, wallImg, WALL_WIDTH, WALL_HEIGHT, SSD1306_WHITE);
-  
-      // Draw each snowflake:
-      display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[*selectMino], w, h, SSD1306_WHITE);
+      // Draw mino
+      display.drawBitmap(START_POSITION_X, icons[0][YPOS], minosImg[selectMino], w, h, SSD1306_WHITE);
       
       display.display(); // Show the display buffer on the screen
       delay(300);        // Pause for 1/10 second
