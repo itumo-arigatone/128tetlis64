@@ -1,4 +1,3 @@
-#include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -19,11 +18,24 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define PLAY_W 10
 
 // 画面上のフィールド左上（壁の外側含む）
-#define FIELD_OX 42
-#define FIELD_OY 14
+// フィールド実寸: 幅 FIELD_W*BLOCK=24, 高さ FIELD_H*BLOCK=50
+// 128x64 の中央寄せ → X=(128-24)/2=52, Y=(64-50)/2=7
+#define FIELD_OX 52
+#define FIELD_OY 7
+
+// ネクスト表示（フィールド右）
+#define NEXT_OX (FIELD_OX + FIELD_W * BLOCK + 4)
+#define NEXT_OY (FIELD_OY + 2)
+
+// ボタン（押下で GND、INPUT_PULLUP）
+#define PIN_LEFT  2
+#define PIN_RIGHT 3
 
 // 落下間隔 (ms)
 #define DROP_MS 250
+// 左右: 初回リピート待ち / 連打間隔
+#define MOVE_DAS_MS 180
+#define MOVE_ARR_MS 80
 
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
@@ -33,6 +45,12 @@ int curMino;
 int curX;  // field 座標（左上）。壁込みなのでプレイ開始は x=1
 int curY;  // field 座標（上ほど小さい）
 int curRot;
+
+// 次に出るミノ
+int nextMino;
+
+unsigned long lastDropMs = 0;
+bool needsDraw = true;
 
 // 7種ミノ × 4回転 × 4x4
 // 各回転は 4x4 の占有マスク
@@ -154,13 +172,68 @@ void clearLines() {
   }
 }
 
+void pickNext() {
+  nextMino = random(0, 7);
+}
+
 bool spawnPiece() {
-  curMino = random(0, 7);
-  curRot = random(0, 4);
-  // ボタンなしでも積み方がバラけるよう、出現Xを少しランダムに
-  curX = 1 + random(0, PLAY_W - 3);
+  curMino = nextMino;
+  pickNext();
+  curRot = 0;
+  // プレイ幅中央付近の固定位置から出現
+  curX = 4;
   curY = 0;
   return !collides(curMino, curRot, curX, curY);
+}
+
+bool tryMove(int dx) {
+  if (collides(curMino, curRot, curX + dx, curY)) return false;
+  curX += dx;
+  needsDraw = true;
+  return true;
+}
+
+void handleButtons() {
+  static bool leftWas = false;
+  static bool rightWas = false;
+  static unsigned long leftNext = 0;
+  static unsigned long rightNext = 0;
+
+  unsigned long now = millis();
+  bool left = digitalRead(PIN_LEFT) == LOW;
+  bool right = digitalRead(PIN_RIGHT) == LOW;
+
+  if (left) {
+    if (!leftWas) {
+      tryMove(-1);
+      leftNext = now + MOVE_DAS_MS;
+    } else if (now >= leftNext) {
+      tryMove(-1);
+      leftNext = now + MOVE_ARR_MS;
+    }
+  }
+  leftWas = left;
+
+  if (right) {
+    if (!rightWas) {
+      tryMove(1);
+      rightNext = now + MOVE_DAS_MS;
+    } else if (now >= rightNext) {
+      tryMove(1);
+      rightNext = now + MOVE_ARR_MS;
+    }
+  }
+  rightWas = right;
+}
+
+void drawFrame() {
+  display.clearDisplay();
+  drawWallFrame();
+  drawField();
+  drawPiece();
+  drawNext();
+  display.display();
+  needsDraw = false;
 }
 
 void drawBlock(int fx, int fy) {
@@ -202,6 +275,17 @@ void drawPiece() {
   }
 }
 
+void drawNext() {
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      if (!cellAt(nextMino, 0, r, c)) continue;
+      int px = NEXT_OX + c * BLOCK;
+      int py = NEXT_OY + r * BLOCK;
+      display.fillRect(px, py, BLOCK, BLOCK, SSD1306_WHITE);
+    }
+  }
+}
+
 void drawGameOver() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -213,11 +297,12 @@ void drawGameOver() {
 }
 
 void setup() {
-  Serial.begin(9600);
+  pinMode(PIN_LEFT, INPUT_PULLUP);
+  pinMode(PIN_RIGHT, INPUT_PULLUP);
+
   randomSeed(analogRead(0));
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("SSD1306 allocation failed"));
     for (;;);
   }
 
@@ -226,29 +311,35 @@ void setup() {
   delay(200);
 
   resetField();
+  pickNext();
   spawnPiece();
+  lastDropMs = millis();
+  needsDraw = true;
 }
 
 void loop() {
-  // 1マス落下
-  if (!collides(curMino, curRot, curX, curY + 1)) {
-    curY++;
-  } else {
-    // 着地 → 固定 → ライン消し → 次ミノ
-    lockPiece();
-    clearLines();
-    if (!spawnPiece()) {
-      drawGameOver();
-      resetField();
-      spawnPiece();
+  handleButtons();
+
+  unsigned long now = millis();
+  if (now - lastDropMs >= DROP_MS) {
+    lastDropMs = now;
+
+    if (!collides(curMino, curRot, curX, curY + 1)) {
+      curY++;
+    } else {
+      lockPiece();
+      clearLines();
+      if (!spawnPiece()) {
+        drawGameOver();
+        resetField();
+        pickNext();
+        spawnPiece();
+      }
     }
+    needsDraw = true;
   }
 
-  display.clearDisplay();
-  drawWallFrame();
-  drawField();
-  drawPiece();
-  display.display();
-
-  delay(DROP_MS);
+  if (needsDraw) {
+    drawFrame();
+  }
 }
