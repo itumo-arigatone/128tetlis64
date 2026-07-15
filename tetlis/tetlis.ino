@@ -27,6 +27,10 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define NEXT_OX (FIELD_OX + FIELD_W * BLOCK + 4)
 #define NEXT_OY (FIELD_OY + 2)
 
+// スコア表示（フィールド左）
+#define HUD_OX 2
+#define HUD_OY 10
+
 // ボタン（押下で GND、INPUT_PULLUP）
 // 十字: D2/D3/D5/D6（D4 は OLED_RESET のため空けている）
 #define PIN_LEFT  2
@@ -57,6 +61,10 @@ int curRot;
 
 // 次に出るミノ
 int nextMino;
+
+// スコア・消したライン数
+uint16_t linesCleared = 0;
+uint32_t score = 0;
 
 unsigned long lastDropMs = 0;
 bool needsDraw = true;
@@ -160,7 +168,8 @@ void lockPiece() {
   }
 }
 
-void clearLines() {
+int clearLines() {
+  int cleared = 0;
   for (int y = FIELD_H - 2; y >= 0; y--) {
     bool full = true;
     for (int x = 1; x <= PLAY_W; x++) {
@@ -180,8 +189,18 @@ void clearLines() {
     for (int x = 1; x <= PLAY_W; x++) {
       field[0][x] = 0;
     }
+    cleared++;
     y++; // 同じ行を再チェック
   }
+
+  if (cleared > 0) {
+    linesCleared += cleared;
+    // 簡易スコア: 1/2/3/4 ライン
+    static const uint16_t points[] = {0, 100, 300, 500, 800};
+    if (cleared > 4) cleared = 4;
+    score += points[cleared];
+  }
+  return cleared;
 }
 
 void pickNext() {
@@ -237,6 +256,8 @@ void restartGame() {
   resetField();
   pickNext();
   spawnPiece();
+  linesCleared = 0;
+  score = 0;
   gameOver = false;
   gameOverWaitRelease = false;
   softDrop = false;
@@ -362,6 +383,7 @@ void drawFrame() {
   display.clearDisplay();
   drawWallFrame();
   drawField();
+  drawHud();
   if (gameOver) {
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
@@ -374,6 +396,17 @@ void drawFrame() {
   }
   display.display();
   needsDraw = false;
+}
+
+void drawHud() {
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(HUD_OX, HUD_OY);
+  display.print(F("L:"));
+  display.print(linesCleared);
+  display.setCursor(HUD_OX, HUD_OY + 12);
+  display.print(F("S:"));
+  display.print(score);
 }
 
 void drawBlock(int fx, int fy) {
