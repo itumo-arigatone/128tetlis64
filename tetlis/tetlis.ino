@@ -133,6 +133,85 @@ uint8_t cellAt(int mino, int rot, int row, int col) {
   return pgm_read_byte(&shapes[mino][rot][row][col]);
 }
 
+// SRS キック (x, y)。y は下方向が正（Guideline の上向き y を反転済み）
+// [fromRot][0=CW/1=CCW][test][0=x,1=y]
+const int8_t PROGMEM kicksJlstz[4][2][5][2] = {
+  { // from 0
+    {{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}},  // ->1 CW
+    {{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},    // ->3 CCW
+  },
+  { // from 1
+    {{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     // ->2 CW
+    {{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},     // ->0 CCW
+  },
+  { // from 2
+    {{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},
+    {{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}},
+  },
+  { // from 3
+    {{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}},
+    {{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},
+  },
+};
+
+const int8_t PROGMEM kicksI[4][2][5][2] = {
+  {
+    {{0, 0}, {-2, 0}, {1, 0}, {-2, 1}, {1, -2}},
+    {{0, 0}, {-1, 0}, {2, 0}, {-1, -2}, {2, 1}},
+  },
+  {
+    {{0, 0}, {-1, 0}, {2, 0}, {-1, -2}, {2, 1}},
+    {{0, 0}, {2, 0}, {-1, 0}, {2, -1}, {-1, 2}},
+  },
+  {
+    {{0, 0}, {2, 0}, {-1, 0}, {2, -1}, {-1, 2}},
+    {{0, 0}, {1, 0}, {-2, 0}, {1, 2}, {-2, -1}},
+  },
+  {
+    {{0, 0}, {1, 0}, {-2, 0}, {1, 2}, {-2, -1}},
+    {{0, 0}, {-2, 0}, {1, 0}, {-2, 1}, {1, -2}},
+  },
+};
+
+// ミノ index: 0=T 1=I 2=J 3=L 4=S 5=Z 6=O
+bool lastWasRotate = false;
+
+bool fieldFilled(int fx, int fy) {
+  if (fx < 0 || fx >= FIELD_W || fy >= FIELD_H) return true;
+  if (fy < 0) return false;
+  return field[fy][fx] != 0;
+}
+
+// T の中心は 4x4 内 (row=2,col=1)。角が3つ以上埋まっていれば Tスピン
+bool isTSpin() {
+  if (curMino != 0 || !lastWasRotate) return false;
+  int cx = curX + 1;
+  int cy = curY + 2;
+  int corners = 0;
+  if (fieldFilled(cx - 1, cy - 1)) corners++;
+  if (fieldFilled(cx + 1, cy - 1)) corners++;
+  if (fieldFilled(cx - 1, cy + 1)) corners++;
+  if (fieldFilled(cx + 1, cy + 1)) corners++;
+  return corners >= 3;
+}
+
+void addScore(int cleared, bool tspin) {
+  if (cleared > 0) {
+    linesCleared += cleared;
+  }
+  if (tspin) {
+    // Tスピン: 0/1/2/3 ライン
+    static const uint16_t tsp[] = {400, 800, 1200, 1600};
+    int c = cleared;
+    if (c > 3) c = 3;
+    score += tsp[c];
+  } else if (cleared > 0) {
+    static const uint16_t points[] = {0, 100, 300, 500, 800};
+    if (cleared > 4) cleared = 4;
+    score += points[cleared];
+  }
+}
+
 void resetField() {
   for (int y = 0; y < FIELD_H; y++) {
     for (int x = 0; x < FIELD_W; x++) {
@@ -195,14 +274,6 @@ int clearLines() {
     cleared++;
     y++; // 同じ行を再チェック
   }
-
-  if (cleared > 0) {
-    linesCleared += cleared;
-    // 簡易スコア: 1/2/3/4 ライン
-    static const uint16_t points[] = {0, 100, 300, 500, 800};
-    if (cleared > 4) cleared = 4;
-    score += points[cleared];
-  }
   return cleared;
 }
 
@@ -217,26 +288,50 @@ bool spawnPiece() {
   // プレイ幅中央付近の固定位置から出現
   curX = 4;
   curY = 0;
+  lastWasRotate = false;
   return !collides(curMino, curRot, curX, curY);
 }
 
 bool tryMove(int dx) {
   if (collides(curMino, curRot, curX + dx, curY)) return false;
   curX += dx;
+  lastWasRotate = false;
   needsDraw = true;
   return true;
 }
 
 bool tryRotate(int dir) {
-  // dir: +1 右回転, -1 左回転
+  // dir: +1 右回転(CW), -1 左回転(CCW)
   int newRot = (curRot + dir + 4) % 4;
-  // 壁際でも回りやすいよう、左右に少しずらして再試行
-  static const int8_t kicks[] = {0, -1, 1, -2, 2};
-  for (uint8_t i = 0; i < sizeof(kicks); i++) {
-    int nx = curX + kicks[i];
-    if (!collides(curMino, newRot, nx, curY)) {
+  int dirIdx = (dir > 0) ? 0 : 1;
+
+  if (curMino == 6) {
+    // O はキック不要
+    if (!collides(curMino, newRot, curX, curY)) {
+      curRot = newRot;
+      lastWasRotate = true;
+      needsDraw = true;
+      return true;
+    }
+    return false;
+  }
+
+  for (uint8_t i = 0; i < 5; i++) {
+    int8_t kx, ky;
+    if (curMino == 1) {
+      kx = (int8_t)pgm_read_byte(&kicksI[curRot][dirIdx][i][0]);
+      ky = (int8_t)pgm_read_byte(&kicksI[curRot][dirIdx][i][1]);
+    } else {
+      kx = (int8_t)pgm_read_byte(&kicksJlstz[curRot][dirIdx][i][0]);
+      ky = (int8_t)pgm_read_byte(&kicksJlstz[curRot][dirIdx][i][1]);
+    }
+    int nx = curX + kx;
+    int ny = curY + ky;
+    if (!collides(curMino, newRot, nx, ny)) {
       curRot = newRot;
       curX = nx;
+      curY = ny;
+      lastWasRotate = true;
       needsDraw = true;
       return true;
     }
@@ -245,8 +340,10 @@ bool tryRotate(int dir) {
 }
 
 void lockAndContinue() {
+  bool tspin = isTSpin();
   lockPiece();
-  clearLines();
+  int cleared = clearLines();
+  addScore(cleared, tspin);
   if (!spawnPiece()) {
     gameOver = true;
     gameOverWaitRelease = true; // 押しっぱなしでの即リスタート防止
