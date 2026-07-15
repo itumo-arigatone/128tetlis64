@@ -30,12 +30,16 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // ボタン（押下で GND、INPUT_PULLUP）
 #define PIN_LEFT  2
 #define PIN_RIGHT 3
+#define PIN_A     5  // 右回転
+#define PIN_B     6  // 左回転
 
 // 落下間隔 (ms)
 #define DROP_MS 250
-// 左右: 初回リピート待ち / 連打間隔
-#define MOVE_DAS_MS 180
-#define MOVE_ARR_MS 80
+// 左右: 初回リピート待ち / 連打間隔（狭いフィールドなので控えめに）
+#define MOVE_DAS_MS 280
+#define MOVE_ARR_MS 160
+// 回転ボタンのチャタリング防止
+#define BTN_DEBOUNCE_MS 40
 
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
@@ -193,15 +197,38 @@ bool tryMove(int dx) {
   return true;
 }
 
+bool tryRotate(int dir) {
+  // dir: +1 右回転, -1 左回転
+  int newRot = (curRot + dir + 4) % 4;
+  // 壁際でも回りやすいよう、左右に少しずらして再試行
+  static const int8_t kicks[] = {0, -1, 1, -2, 2};
+  for (uint8_t i = 0; i < sizeof(kicks); i++) {
+    int nx = curX + kicks[i];
+    if (!collides(curMino, newRot, nx, curY)) {
+      curRot = newRot;
+      curX = nx;
+      needsDraw = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 void handleButtons() {
   static bool leftWas = false;
   static bool rightWas = false;
+  static bool aStable = false;
+  static bool bStable = false;
+  static unsigned long aChangeMs = 0;
+  static unsigned long bChangeMs = 0;
   static unsigned long leftNext = 0;
   static unsigned long rightNext = 0;
 
   unsigned long now = millis();
   bool left = digitalRead(PIN_LEFT) == LOW;
   bool right = digitalRead(PIN_RIGHT) == LOW;
+  bool aRaw = digitalRead(PIN_A) == LOW;
+  bool bRaw = digitalRead(PIN_B) == LOW;
 
   if (left) {
     if (!leftWas) {
@@ -224,6 +251,26 @@ void handleButtons() {
     }
   }
   rightWas = right;
+
+  // 回転: 信号が一定時間安定したあとの「押下」だけ反応（離し時チャタリング対策）
+  static bool aRawLast = false;
+  static bool bRawLast = false;
+  if (aRaw != aRawLast) {
+    aChangeMs = now;
+    aRawLast = aRaw;
+  }
+  if ((now - aChangeMs) >= BTN_DEBOUNCE_MS && aRaw != aStable) {
+    aStable = aRaw;
+    if (aStable) tryRotate(1);
+  }
+  if (bRaw != bRawLast) {
+    bChangeMs = now;
+    bRawLast = bRaw;
+  }
+  if ((now - bChangeMs) >= BTN_DEBOUNCE_MS && bRaw != bStable) {
+    bStable = bRaw;
+    if (bStable) tryRotate(-1);
+  }
 }
 
 void drawFrame() {
@@ -299,6 +346,8 @@ void drawGameOver() {
 void setup() {
   pinMode(PIN_LEFT, INPUT_PULLUP);
   pinMode(PIN_RIGHT, INPUT_PULLUP);
+  pinMode(PIN_A, INPUT_PULLUP);
+  pinMode(PIN_B, INPUT_PULLUP);
 
   randomSeed(analogRead(0));
 
