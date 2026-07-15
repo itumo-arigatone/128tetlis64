@@ -19,12 +19,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // 画面上のフィールド左上（壁の外側含む）
 // フィールド実寸: 幅 FIELD_W*BLOCK=24, 高さ FIELD_H*BLOCK=50
-// 128x64 の中央寄せ → X=(128-24)/2=52, Y=(64-50)/2=7
-#define FIELD_OX 52
+// プレイ中は中央寄せ、ゲームオーバー時は右端
+#define FIELD_OX_PLAY 52
+#define FIELD_OX_OVER (SCREEN_WIDTH - FIELD_W * BLOCK)
 #define FIELD_OY 7
 
 // ネクスト表示（フィールド右）
-#define NEXT_OX (FIELD_OX + FIELD_W * BLOCK + 4)
+#define NEXT_OX (FIELD_OX_PLAY + FIELD_W * BLOCK + 4)
 #define NEXT_OY (FIELD_OY + 2)
 
 // スコア表示（フィールド左）
@@ -42,13 +43,15 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define PIN_B     8  // 左回転
 
 // 落下間隔 (ms)
-#define DROP_MS 400
+#define DROP_MS 750
 #define SOFT_DROP_MS 50
 // 左右: 初回リピート待ち / 連打間隔（狭いフィールドなので控えめに）
 #define MOVE_DAS_MS 280
 #define MOVE_ARR_MS 160
 // 回転・ハードドロップのチャタリング防止
 #define BTN_DEBOUNCE_MS 40
+// 着地ゴーストの点滅間隔 (ms)
+#define GHOST_BLINK_MS 420
 
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
@@ -383,13 +386,10 @@ void drawFrame() {
   display.clearDisplay();
   drawWallFrame();
   drawField();
-  drawHud();
   if (gameOver) {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(37, 28);
-    display.print(F("GAME OVER"));
+    drawGameOverScreen();
   } else {
+    drawHud();
     drawGhost();
     drawPiece();
     drawNext();
@@ -409,10 +409,43 @@ void drawHud() {
   display.print(score);
 }
 
+void drawCenteredText(const __FlashStringHelper *text, int y, uint8_t size) {
+  display.setTextSize(size);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor((SCREEN_WIDTH - (int16_t)w) / 2, y);
+  display.print(text);
+}
+
+void drawCenteredNumber(uint32_t value, int y, uint8_t size) {
+  char buf[11];
+  ultoa(value, buf, 10);
+  display.setTextSize(size);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor((SCREEN_WIDTH - (int16_t)w) / 2, y);
+  display.print(buf);
+}
+
+void drawGameOverScreen() {
+  // 上: GAME OVER / 中: スコア / 下: ライン数（いずれも中央寄せ・数値のみ）
+  drawCenteredText(F("GAME OVER"), 6, 1);
+  drawCenteredNumber(score, 26, 2);
+  drawCenteredNumber(linesCleared, 50, 1);
+}
+
+int fieldDrawX() {
+  return gameOver ? FIELD_OX_OVER : FIELD_OX_PLAY;
+}
+
 void drawBlock(int fx, int fy) {
   // 底壁行・左右壁は壁枠として描くのでスキップしてもよいが、
   // 積みブロックはプレイエリアのみ描画
-  int px = FIELD_OX + fx * BLOCK;
+  int px = fieldDrawX() + fx * BLOCK;
   int py = FIELD_OY + fy * BLOCK;
   display.fillRect(px, py, BLOCK, BLOCK, SSD1306_WHITE);
 }
@@ -430,8 +463,10 @@ int ghostY() {
   return y;
 }
 
-// 着地位置のシルエット外周を 1px で描く（2x2 でも枠に見える）
+// 着地位置のシルエット外周を 1px で描く（点滅で視認性を上げる）
 void drawGhost() {
+  if ((millis() / GHOST_BLINK_MS) & 1) return; // 点滅のオフ相
+
   int gy = ghostY();
   if (gy == curY) return; // 着地直前は本体と重なるので省略
 
@@ -442,7 +477,7 @@ void drawGhost() {
       int fy = gy + r;
       if (fy < 0) continue;
 
-      int px = FIELD_OX + fx * BLOCK;
+      int px = fieldDrawX() + fx * BLOCK;
       int py = FIELD_OY + fy * BLOCK;
 
       if (!shapeOccupied(r - 1, c)) {
@@ -530,6 +565,14 @@ void setup() {
 
 void loop() {
   handleButtons();
+
+  // ゴースト点滅のために相が変わったら再描画
+  static uint8_t ghostBlinkPhase = 0;
+  uint8_t phase = (millis() / GHOST_BLINK_MS) & 1;
+  if (!gameOver && phase != ghostBlinkPhase) {
+    ghostBlinkPhase = phase;
+    needsDraw = true;
+  }
 
   if (!gameOver) {
     unsigned long now = millis();
