@@ -61,6 +61,8 @@ int nextMino;
 unsigned long lastDropMs = 0;
 bool needsDraw = true;
 bool softDrop = false;
+bool gameOver = false;
+bool gameOverWaitRelease = false;
 
 // 7種ミノ × 4回転 × 4x4
 // 各回転は 4x4 の占有マスク
@@ -224,13 +226,31 @@ void lockAndContinue() {
   lockPiece();
   clearLines();
   if (!spawnPiece()) {
-    drawGameOver();
-    resetField();
-    pickNext();
-    spawnPiece();
+    gameOver = true;
+    gameOverWaitRelease = true; // 押しっぱなしでの即リスタート防止
   }
   lastDropMs = millis();
   needsDraw = true;
+}
+
+void restartGame() {
+  resetField();
+  pickNext();
+  spawnPiece();
+  gameOver = false;
+  gameOverWaitRelease = false;
+  softDrop = false;
+  lastDropMs = millis();
+  needsDraw = true;
+}
+
+bool anyButtonDown() {
+  return digitalRead(PIN_LEFT) == LOW
+      || digitalRead(PIN_RIGHT) == LOW
+      || digitalRead(PIN_UP) == LOW
+      || digitalRead(PIN_DOWN) == LOW
+      || digitalRead(PIN_A) == LOW
+      || digitalRead(PIN_B) == LOW;
 }
 
 void hardDrop() {
@@ -246,13 +266,37 @@ void handleButtons() {
   static bool aStable = false;
   static bool bStable = false;
   static bool upStable = false;
+  static bool anyStable = false;
   static unsigned long aChangeMs = 0;
   static unsigned long bChangeMs = 0;
   static unsigned long upChangeMs = 0;
+  static unsigned long anyChangeMs = 0;
   static unsigned long leftNext = 0;
   static unsigned long rightNext = 0;
+  static bool anyRawLast = false;
 
   unsigned long now = millis();
+
+  // ゲームオーバー中はどれか押すまで待つ
+  if (gameOver) {
+    bool anyRaw = anyButtonDown();
+    if (gameOverWaitRelease) {
+      if (!anyRaw) gameOverWaitRelease = false;
+      softDrop = false;
+      return;
+    }
+    if (anyRaw != anyRawLast) {
+      anyChangeMs = now;
+      anyRawLast = anyRaw;
+    }
+    if ((now - anyChangeMs) >= BTN_DEBOUNCE_MS && anyRaw != anyStable) {
+      anyStable = anyRaw;
+      if (anyStable) restartGame();
+    }
+    softDrop = false;
+    return;
+  }
+
   bool left = digitalRead(PIN_LEFT) == LOW;
   bool right = digitalRead(PIN_RIGHT) == LOW;
   bool aRaw = digitalRead(PIN_A) == LOW;
@@ -318,8 +362,16 @@ void drawFrame() {
   display.clearDisplay();
   drawWallFrame();
   drawField();
-  drawPiece();
-  drawNext();
+  if (gameOver) {
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(37, 28);
+    display.print(F("GAME OVER"));
+  } else {
+    drawGhost();
+    drawPiece();
+    drawNext();
+  }
   display.display();
   needsDraw = false;
 }
@@ -330,6 +382,50 @@ void drawBlock(int fx, int fy) {
   int px = FIELD_OX + fx * BLOCK;
   int py = FIELD_OY + fy * BLOCK;
   display.fillRect(px, py, BLOCK, BLOCK, SSD1306_WHITE);
+}
+
+bool shapeOccupied(int r, int c) {
+  if (r < 0 || r >= 4 || c < 0 || c >= 4) return false;
+  return cellAt(curMino, curRot, r, c);
+}
+
+int ghostY() {
+  int y = curY;
+  while (!collides(curMino, curRot, curX, y + 1)) {
+    y++;
+  }
+  return y;
+}
+
+// 着地位置のシルエット外周を 1px で描く（2x2 でも枠に見える）
+void drawGhost() {
+  int gy = ghostY();
+  if (gy == curY) return; // 着地直前は本体と重なるので省略
+
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      if (!shapeOccupied(r, c)) continue;
+      int fx = curX + c;
+      int fy = gy + r;
+      if (fy < 0) continue;
+
+      int px = FIELD_OX + fx * BLOCK;
+      int py = FIELD_OY + fy * BLOCK;
+
+      if (!shapeOccupied(r - 1, c)) {
+        display.drawFastHLine(px, py, BLOCK, SSD1306_WHITE);
+      }
+      if (!shapeOccupied(r + 1, c)) {
+        display.drawFastHLine(px, py + BLOCK - 1, BLOCK, SSD1306_WHITE);
+      }
+      if (!shapeOccupied(r, c - 1)) {
+        display.drawFastVLine(px, py, BLOCK, SSD1306_WHITE);
+      }
+      if (!shapeOccupied(r, c + 1)) {
+        display.drawFastVLine(px + BLOCK - 1, py, BLOCK, SSD1306_WHITE);
+      }
+    }
+  }
 }
 
 void drawWallFrame() {
@@ -374,16 +470,6 @@ void drawNext() {
   }
 }
 
-void drawGameOver() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(40, 28);
-  display.print(F("GAME OVER"));
-  display.display();
-  delay(1500);
-}
-
 void setup() {
   pinMode(PIN_LEFT, INPUT_PULLUP);
   pinMode(PIN_RIGHT, INPUT_PULLUP);
@@ -412,16 +498,18 @@ void setup() {
 void loop() {
   handleButtons();
 
-  unsigned long now = millis();
-  unsigned long interval = softDrop ? SOFT_DROP_MS : DROP_MS;
-  if (now - lastDropMs >= interval) {
-    lastDropMs = now;
+  if (!gameOver) {
+    unsigned long now = millis();
+    unsigned long interval = softDrop ? SOFT_DROP_MS : DROP_MS;
+    if (now - lastDropMs >= interval) {
+      lastDropMs = now;
 
-    if (!collides(curMino, curRot, curX, curY + 1)) {
-      curY++;
-      needsDraw = true;
-    } else {
-      lockAndContinue();
+      if (!collides(curMino, curRot, curX, curY + 1)) {
+        curY++;
+        needsDraw = true;
+      } else {
+        lockAndContinue();
+      }
     }
   }
 
