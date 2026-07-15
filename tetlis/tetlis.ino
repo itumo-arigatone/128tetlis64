@@ -28,17 +28,22 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define NEXT_OY (FIELD_OY + 2)
 
 // ボタン（押下で GND、INPUT_PULLUP）
+// 十字: D2/D3/D5/D6（D4 は OLED_RESET のため空けている）
 #define PIN_LEFT  2
 #define PIN_RIGHT 3
-#define PIN_A     5  // 右回転
-#define PIN_B     6  // 左回転
+#define PIN_UP    5  // ハードドロップ
+#define PIN_DOWN  6  // ソフトドロップ
+// AB: D7/D8
+#define PIN_A     7  // 右回転
+#define PIN_B     8  // 左回転
 
 // 落下間隔 (ms)
-#define DROP_MS 250
+#define DROP_MS 400
+#define SOFT_DROP_MS 50
 // 左右: 初回リピート待ち / 連打間隔（狭いフィールドなので控えめに）
 #define MOVE_DAS_MS 280
 #define MOVE_ARR_MS 160
-// 回転ボタンのチャタリング防止
+// 回転・ハードドロップのチャタリング防止
 #define BTN_DEBOUNCE_MS 40
 
 // 壁・積みブロック用グリッド（1=占有）
@@ -55,6 +60,7 @@ int nextMino;
 
 unsigned long lastDropMs = 0;
 bool needsDraw = true;
+bool softDrop = false;
 
 // 7種ミノ × 4回転 × 4x4
 // 各回転は 4x4 の占有マスク
@@ -214,13 +220,35 @@ bool tryRotate(int dir) {
   return false;
 }
 
+void lockAndContinue() {
+  lockPiece();
+  clearLines();
+  if (!spawnPiece()) {
+    drawGameOver();
+    resetField();
+    pickNext();
+    spawnPiece();
+  }
+  lastDropMs = millis();
+  needsDraw = true;
+}
+
+void hardDrop() {
+  while (!collides(curMino, curRot, curX, curY + 1)) {
+    curY++;
+  }
+  lockAndContinue();
+}
+
 void handleButtons() {
   static bool leftWas = false;
   static bool rightWas = false;
   static bool aStable = false;
   static bool bStable = false;
+  static bool upStable = false;
   static unsigned long aChangeMs = 0;
   static unsigned long bChangeMs = 0;
+  static unsigned long upChangeMs = 0;
   static unsigned long leftNext = 0;
   static unsigned long rightNext = 0;
 
@@ -229,6 +257,10 @@ void handleButtons() {
   bool right = digitalRead(PIN_RIGHT) == LOW;
   bool aRaw = digitalRead(PIN_A) == LOW;
   bool bRaw = digitalRead(PIN_B) == LOW;
+  bool down = digitalRead(PIN_DOWN) == LOW;
+  bool upRaw = digitalRead(PIN_UP) == LOW;
+
+  softDrop = down;
 
   if (left) {
     if (!leftWas) {
@@ -252,9 +284,10 @@ void handleButtons() {
   }
   rightWas = right;
 
-  // 回転: 信号が一定時間安定したあとの「押下」だけ反応（離し時チャタリング対策）
+  // 回転・ハードドロップ: 安定した「押下」だけ反応
   static bool aRawLast = false;
   static bool bRawLast = false;
+  static bool upRawLast = false;
   if (aRaw != aRawLast) {
     aChangeMs = now;
     aRawLast = aRaw;
@@ -270,6 +303,14 @@ void handleButtons() {
   if ((now - bChangeMs) >= BTN_DEBOUNCE_MS && bRaw != bStable) {
     bStable = bRaw;
     if (bStable) tryRotate(-1);
+  }
+  if (upRaw != upRawLast) {
+    upChangeMs = now;
+    upRawLast = upRaw;
+  }
+  if ((now - upChangeMs) >= BTN_DEBOUNCE_MS && upRaw != upStable) {
+    upStable = upRaw;
+    if (upStable) hardDrop();
   }
 }
 
@@ -348,6 +389,8 @@ void setup() {
   pinMode(PIN_RIGHT, INPUT_PULLUP);
   pinMode(PIN_A, INPUT_PULLUP);
   pinMode(PIN_B, INPUT_PULLUP);
+  pinMode(PIN_DOWN, INPUT_PULLUP);
+  pinMode(PIN_UP, INPUT_PULLUP);
 
   randomSeed(analogRead(0));
 
@@ -370,22 +413,16 @@ void loop() {
   handleButtons();
 
   unsigned long now = millis();
-  if (now - lastDropMs >= DROP_MS) {
+  unsigned long interval = softDrop ? SOFT_DROP_MS : DROP_MS;
+  if (now - lastDropMs >= interval) {
     lastDropMs = now;
 
     if (!collides(curMino, curRot, curX, curY + 1)) {
       curY++;
+      needsDraw = true;
     } else {
-      lockPiece();
-      clearLines();
-      if (!spawnPiece()) {
-        drawGameOver();
-        resetField();
-        pickNext();
-        spawnPiece();
-      }
+      lockAndContinue();
     }
-    needsDraw = true;
   }
 
   if (needsDraw) {
