@@ -52,6 +52,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BTN_DEBOUNCE_MS 40
 // 着地ゴーストの点滅間隔 (ms)
 #define GHOST_BLINK_MS 420
+// 動作確認用 Lチカ（Uno/Nano 内蔵 LED = D13）
+#define HEARTBEAT_MS 500
 
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
@@ -636,6 +638,7 @@ void drawNext() {
 }
 
 void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_LEFT, INPUT_PULLUP);
   pinMode(PIN_RIGHT, INPUT_PULLUP);
   pinMode(PIN_A, INPUT_PULLUP);
@@ -646,7 +649,11 @@ void setup() {
   randomSeed(analogRead(0));
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    for (;;);
+    // OLED 失敗時は高速点滅（MCU は生きている）
+    for (;;) {
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      delay(100);
+    }
   }
 
   display.clearDisplay();
@@ -661,6 +668,9 @@ void setup() {
 }
 
 void loop() {
+  // 動作確認: 約0.5秒周期で D13 を点滅
+  digitalWrite(LED_BUILTIN, (millis() / HEARTBEAT_MS) & 1);
+
   handleButtons();
 
   // ゴースト点滅のために相が変わったら再描画
