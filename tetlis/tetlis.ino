@@ -4,9 +4,29 @@
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET 4
+// 4線 I2C モジュールは RESET 無し → -1
+#define OLED_RESET -1
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// I2C 上に ACK があるか（Adafruit begin は未接続でも true を返すことがある）
+uint8_t probeI2C(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission();  // 0 = ACK（端末あり）
+}
+
+// エラー点滅: n 回短点滅 → 長休止を繰り返す
+void blinkError(uint8_t n) {
+  for (;;) {
+    for (uint8_t i = 0; i < n; i++) {
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(120);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(120);
+    }
+    delay(800);
+  }
+}
 
 // 1ブロック = 2x2 px
 #define BLOCK 2
@@ -52,8 +72,22 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BTN_DEBOUNCE_MS 40
 // 着地ゴーストの点滅間隔 (ms)
 #define GHOST_BLINK_MS 420
+// ライン消去点滅: 3往復 × 80ms × 2相 ≒ 480ms
+#define CLEAR_BLINK_MS 80
+#define CLEAR_BLINK_TIMES 3
 // 動作確認用 Lチカ（Uno/Nano 内蔵 LED = D13）
 #define HEARTBEAT_MS 500
+
+// バッテリー残量（TP4056 B+ を 100k/100k 分圧 → A1）
+// 未配線でもゲームは動く。妥当電圧のときだけ右上に % 表示
+#define PIN_BAT A1
+#define BAT_DIV 2
+#define BAT_MV_EMPTY 3300
+#define BAT_MV_FULL 4200
+#define BAT_MV_MIN_VALID 2800
+#define BAT_MV_MAX_VALID 4500
+#define BAT_POLL_MS 1000
+#define BAT_ADC_SAMPLES 4
 
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
@@ -76,6 +110,18 @@ bool needsDraw = true;
 bool softDrop = false;
 bool gameOver = false;
 bool gameOverWaitRelease = false;
+
+// ライン消去アニメ
+bool clearing = false;
+uint32_t clearRows = 0;  // bit y = 消去対象行
+unsigned long clearAnimStart = 0;
+uint8_t pendingClearCount = 0;
+bool pendingTspin = false;
+
+// バッテリー表示用キャッシュ（表示専用。未配線なら batValid=false）
+bool batValid = false;
+uint8_t batPercent = 0;
+unsigned long lastBatPollMs = 0;
 
 // 7種ミノ × 4回転 × 4x4
 // 各回転は 4x4 の占有マスク
@@ -252,6 +298,25 @@ void lockPiece() {
   }
 }
 
+// 揃った行を検出して clearRows に載せ、消さずに件数を返す
+int markFullLines() {
+  clearRows = 0;
+  int cleared = 0;
+  for (int y = 0; y < FIELD_H - 1; y++) {
+    bool full = true;
+    for (int x = 1; x <= PLAY_W; x++) {
+      if (!field[y][x]) {
+        full = false;
+        break;
+      }
+    }
+    if (!full) continue;
+    clearRows |= (1UL << y);
+    cleared++;
+  }
+  return cleared;
+}
+
 int clearLines() {
   int cleared = 0;
   for (int y = FIELD_H - 2; y >= 0; y--) {
@@ -341,11 +406,34 @@ bool tryRotate(int dir) {
   return false;
 }
 
+void finishClearAndContinue() {
+  clearLines();
+  addScore(pendingClearCount, pendingTspin);
+  clearing = false;
+  clearRows = 0;
+  pendingClearCount = 0;
+  pendingTspin = false;
+  if (!spawnPiece()) {
+    gameOver = true;
+    gameOverWaitRelease = true; // 押しっぱなしでの即リスタート防止
+  }
+  lastDropMs = millis();
+  needsDraw = true;
+}
+
 void lockAndContinue() {
   bool tspin = isTSpin();
   lockPiece();
-  int cleared = clearLines();
-  addScore(cleared, tspin);
+  int cleared = markFullLines();
+  if (cleared > 0) {
+    clearing = true;
+    pendingClearCount = (uint8_t)cleared;
+    pendingTspin = tspin;
+    clearAnimStart = millis();
+    needsDraw = true;
+    return;
+  }
+  addScore(0, tspin);
   if (!spawnPiece()) {
     gameOver = true;
     gameOverWaitRelease = true; // 押しっぱなしでの即リスタート防止
@@ -363,6 +451,10 @@ void restartGame() {
   gameOver = false;
   gameOverWaitRelease = false;
   softDrop = false;
+  clearing = false;
+  clearRows = 0;
+  pendingClearCount = 0;
+  pendingTspin = false;
   lastDropMs = millis();
   needsDraw = true;
 }
@@ -416,6 +508,12 @@ void handleButtons() {
       anyStable = anyRaw;
       if (anyStable) restartGame();
     }
+    softDrop = false;
+    return;
+  }
+
+  // ライン消去アニメ中は操作しない
+  if (clearing) {
     softDrop = false;
     return;
   }
@@ -481,6 +579,70 @@ void handleButtons() {
   }
 }
 
+// 分圧未接続でもゲーム処理には触れない（表示の有無だけ）
+void updateBattery() {
+  unsigned long now = millis();
+  if (lastBatPollMs != 0 && (now - lastBatPollMs) < BAT_POLL_MS) return;
+  lastBatPollMs = now;
+
+  uint16_t sum = 0;
+  for (uint8_t i = 0; i < BAT_ADC_SAMPLES; i++) {
+    sum += analogRead(PIN_BAT);
+  }
+  uint16_t raw = sum / BAT_ADC_SAMPLES;
+  // AVcc=5V 想定、分圧 1/2 を戻す
+  uint16_t mV = (uint16_t)((raw * 5000UL * (uint32_t)BAT_DIV) / 1023UL);
+
+  bool valid = (mV >= BAT_MV_MIN_VALID && mV <= BAT_MV_MAX_VALID);
+  uint8_t pct = 0;
+  if (valid) {
+    if (mV <= BAT_MV_EMPTY) {
+      pct = 0;
+    } else if (mV >= BAT_MV_FULL) {
+      pct = 100;
+    } else {
+      pct = (uint8_t)(((uint32_t)(mV - BAT_MV_EMPTY) * 100UL) /
+                      (uint32_t)(BAT_MV_FULL - BAT_MV_EMPTY));
+    }
+  }
+
+  if (valid != batValid || (valid && pct != batPercent)) {
+    needsDraw = true;
+  }
+  batValid = valid;
+  batPercent = pct;
+}
+
+void drawBattery() {
+  if (!batValid) return;
+
+  char buf[5];
+  if (batPercent >= 100) {
+    buf[0] = '1';
+    buf[1] = '0';
+    buf[2] = '0';
+    buf[3] = '%';
+    buf[4] = '\0';
+  } else if (batPercent >= 10) {
+    buf[0] = '0' + (batPercent / 10);
+    buf[1] = '0' + (batPercent % 10);
+    buf[2] = '%';
+    buf[3] = '\0';
+  } else {
+    buf[0] = '0' + batPercent;
+    buf[1] = '%';
+    buf[2] = '\0';
+  }
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor(SCREEN_WIDTH - (int16_t)w, 0);
+  display.print(buf);
+}
+
 void drawFrame() {
   display.clearDisplay();
   drawWallFrame();
@@ -489,8 +651,12 @@ void drawFrame() {
     drawGameOverScreen();
   } else {
     drawHud();
-    drawGhost();
-    drawPiece();
+    drawBattery();
+    // 消去アニメ中はロック済みなので落下ミノ／ゴーストは描かない
+    if (!clearing) {
+      drawGhost();
+      drawPiece();
+    }
     drawNext();
   }
   display.display();
@@ -607,7 +773,10 @@ void drawWallFrame() {
 }
 
 void drawField() {
+  // 消去対象行はオフ相で描画スキップ（点滅）
+  bool hideClear = clearing && (((millis() - clearAnimStart) / CLEAR_BLINK_MS) & 1);
   for (int y = 0; y < FIELD_H - 1; y++) {
+    if (hideClear && (clearRows & (1UL << y))) continue;
     for (int x = 1; x <= PLAY_W; x++) {
       if (field[y][x]) drawBlock(x, y);
     }
@@ -648,12 +817,22 @@ void setup() {
 
   randomSeed(analogRead(0));
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    // OLED 失敗時は高速点滅（MCU は生きている）
-    for (;;) {
-      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-      delay(100);
-    }
+  Wire.begin();
+  delay(50);
+
+  uint8_t addr = 0;
+  if (probeI2C(0x3C) == 0) {
+    addr = 0x3C;
+  } else if (probeI2C(0x3D) == 0) {
+    addr = 0x3D;
+  } else {
+    // OLED 未検出（配線・電源・ピンを疑う）: 2回点滅
+    blinkError(2);
+  }
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, addr)) {
+    // begin 失敗: 3回点滅
+    blinkError(3);
   }
 
   display.clearDisplay();
@@ -671,27 +850,42 @@ void loop() {
   // 動作確認: 約0.5秒周期で D13 を点滅
   digitalWrite(LED_BUILTIN, (millis() / HEARTBEAT_MS) & 1);
 
+  updateBattery();
   handleButtons();
 
-  // ゴースト点滅のために相が変わったら再描画
-  static uint8_t ghostBlinkPhase = 0;
-  uint8_t phase = (millis() / GHOST_BLINK_MS) & 1;
-  if (!gameOver && phase != ghostBlinkPhase) {
-    ghostBlinkPhase = phase;
-    needsDraw = true;
-  }
+  if (clearing) {
+    static uint8_t clearBlinkPhase = 0;
+    unsigned long elapsed = millis() - clearAnimStart;
+    uint8_t phase = (elapsed / CLEAR_BLINK_MS) & 1;
+    if (phase != clearBlinkPhase) {
+      clearBlinkPhase = phase;
+      needsDraw = true;
+    }
+    if (elapsed >= (unsigned long)CLEAR_BLINK_TIMES * 2 * CLEAR_BLINK_MS) {
+      clearBlinkPhase = 0;
+      finishClearAndContinue();
+    }
+  } else {
+    // ゴースト点滅のために相が変わったら再描画
+    static uint8_t ghostBlinkPhase = 0;
+    uint8_t phase = (millis() / GHOST_BLINK_MS) & 1;
+    if (!gameOver && phase != ghostBlinkPhase) {
+      ghostBlinkPhase = phase;
+      needsDraw = true;
+    }
 
-  if (!gameOver) {
-    unsigned long now = millis();
-    unsigned long interval = softDrop ? SOFT_DROP_MS : DROP_MS;
-    if (now - lastDropMs >= interval) {
-      lastDropMs = now;
+    if (!gameOver) {
+      unsigned long now = millis();
+      unsigned long interval = softDrop ? SOFT_DROP_MS : DROP_MS;
+      if (now - lastDropMs >= interval) {
+        lastDropMs = now;
 
-      if (!collides(curMino, curRot, curX, curY + 1)) {
-        curY++;
-        needsDraw = true;
-      } else {
-        lockAndContinue();
+        if (!collides(curMino, curRot, curX, curY + 1)) {
+          curY++;
+          needsDraw = true;
+        } else {
+          lockAndContinue();
+        }
       }
     }
   }
