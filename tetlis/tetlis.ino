@@ -78,6 +78,17 @@ void blinkError(uint8_t n) {
 // 動作確認用 Lチカ（Uno/Nano 内蔵 LED = D13）
 #define HEARTBEAT_MS 500
 
+// バッテリー残量（TP4056 B+ を 100k/100k 分圧 → A1）
+// 未配線でもゲームは動く。妥当電圧のときだけ右上に % 表示
+#define PIN_BAT A1
+#define BAT_DIV 2
+#define BAT_MV_EMPTY 3300
+#define BAT_MV_FULL 4200
+#define BAT_MV_MIN_VALID 2800
+#define BAT_MV_MAX_VALID 4500
+#define BAT_POLL_MS 1000
+#define BAT_ADC_SAMPLES 4
+
 // 壁・積みブロック用グリッド（1=占有）
 uint8_t field[FIELD_H][FIELD_W];
 
@@ -106,6 +117,11 @@ uint32_t clearRows = 0;  // bit y = 消去対象行
 unsigned long clearAnimStart = 0;
 uint8_t pendingClearCount = 0;
 bool pendingTspin = false;
+
+// バッテリー表示用キャッシュ（表示専用。未配線なら batValid=false）
+bool batValid = false;
+uint8_t batPercent = 0;
+unsigned long lastBatPollMs = 0;
 
 // 7種ミノ × 4回転 × 4x4
 // 各回転は 4x4 の占有マスク
@@ -563,6 +579,70 @@ void handleButtons() {
   }
 }
 
+// 分圧未接続でもゲーム処理には触れない（表示の有無だけ）
+void updateBattery() {
+  unsigned long now = millis();
+  if (lastBatPollMs != 0 && (now - lastBatPollMs) < BAT_POLL_MS) return;
+  lastBatPollMs = now;
+
+  uint16_t sum = 0;
+  for (uint8_t i = 0; i < BAT_ADC_SAMPLES; i++) {
+    sum += analogRead(PIN_BAT);
+  }
+  uint16_t raw = sum / BAT_ADC_SAMPLES;
+  // AVcc=5V 想定、分圧 1/2 を戻す
+  uint16_t mV = (uint16_t)((raw * 5000UL * (uint32_t)BAT_DIV) / 1023UL);
+
+  bool valid = (mV >= BAT_MV_MIN_VALID && mV <= BAT_MV_MAX_VALID);
+  uint8_t pct = 0;
+  if (valid) {
+    if (mV <= BAT_MV_EMPTY) {
+      pct = 0;
+    } else if (mV >= BAT_MV_FULL) {
+      pct = 100;
+    } else {
+      pct = (uint8_t)(((uint32_t)(mV - BAT_MV_EMPTY) * 100UL) /
+                      (uint32_t)(BAT_MV_FULL - BAT_MV_EMPTY));
+    }
+  }
+
+  if (valid != batValid || (valid && pct != batPercent)) {
+    needsDraw = true;
+  }
+  batValid = valid;
+  batPercent = pct;
+}
+
+void drawBattery() {
+  if (!batValid) return;
+
+  char buf[5];
+  if (batPercent >= 100) {
+    buf[0] = '1';
+    buf[1] = '0';
+    buf[2] = '0';
+    buf[3] = '%';
+    buf[4] = '\0';
+  } else if (batPercent >= 10) {
+    buf[0] = '0' + (batPercent / 10);
+    buf[1] = '0' + (batPercent % 10);
+    buf[2] = '%';
+    buf[3] = '\0';
+  } else {
+    buf[0] = '0' + batPercent;
+    buf[1] = '%';
+    buf[2] = '\0';
+  }
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor(SCREEN_WIDTH - (int16_t)w, 0);
+  display.print(buf);
+}
+
 void drawFrame() {
   display.clearDisplay();
   drawWallFrame();
@@ -571,6 +651,7 @@ void drawFrame() {
     drawGameOverScreen();
   } else {
     drawHud();
+    drawBattery();
     // 消去アニメ中はロック済みなので落下ミノ／ゴーストは描かない
     if (!clearing) {
       drawGhost();
@@ -769,6 +850,7 @@ void loop() {
   // 動作確認: 約0.5秒周期で D13 を点滅
   digitalWrite(LED_BUILTIN, (millis() / HEARTBEAT_MS) & 1);
 
+  updateBattery();
   handleButtons();
 
   if (clearing) {
